@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>再帰的中点線分描画デモ（正多角形一時停止・再開機能付き）</title>
+  <title>再帰的中点線分描画デモ（ランダム割当・内角個別表示）</title>
   <style>
     body { margin: 0; overflow: hidden; background: #ffffff; }
     canvas { display: block; }
@@ -10,75 +10,58 @@
 </head>
 <body>
   <canvas id="canvas"></canvas>
-  
-  <!-- dat.GUI の読み込み（CDN 経由） -->
+
+  <!-- dat.GUI の読み込み（CDN経由） -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
   <script>
-    // 各種パラメータ設定オブジェクト
+    // パラメータ設定オブジェクト
     const params = {
       numberOfCircles: 5,      // 配置する円の個数
-      iterations: 10,          // 反復回数（初期値を10に設定）
+      iterations: 10,          // 反復回数（初期値10）
       circleRadius: 50,        // 各小円の半径
       outerRadius: 200,        // 小円の中心配置に用いる大円の半径
       pointSize: 5,            // 動く点の半径
       showCircles: true,       // 小円自体を描画するか
-      lineColor: "#000000",    // 線分の色（初期値を黒に設定）
+      lineColor: "#000000",    // 線分の色（初期値：黒）
       pointColor: "#ff0000",   // 動く点の色
       speedMultiplier: 1.0,    // 速度全体にかける係数
-      backgroundColor: "#ffffff"  // 背景色（初期値を白に設定）
+      backgroundColor: "#ffffff",  // 背景色（初期値：白）
+      maxSpeed: 0.1            // ランダムに設定する速度の上限
     };
 
-    // 全体設定オブジェクト
+    // 全体設定オブジェクト（ランダム割当・初期値リセット用）
     const globalSettings = {
       initialAngle: 0,          // 円周上の点の初期位置
-      speed: 0.01,              // 円の速度
+      speed: 0.01,              // 円の初期速度
       circlePlacementOffset: 0, // 小円配置時の角度オフセット
-      autoStopOnRegular: false, // 「正多角形で一時停止」機能：内側の多角形が正多角形になったときに一時停止するか
-      paused: false,            // 現在一時停止中かどうか
-      // 一時停止時に各円の速度を保存する配列
-      savedSpeeds: [],
+
       resetCircles: function() {
-        // 各円の角度と速度を全体設定の値にリセット
+        // 各円の角度と速度を全体設定の初期値にリセット
         circles.forEach(function(c) {
           c.angle = globalSettings.initialAngle;
           c.speed = globalSettings.speed;
         });
-        globalSettings.paused = false;
         rebuildCircleFolder();
       },
-      // 一時停止（保存しておいた速度はそのまま保持）
-      pauseMovement: function() {
-        if (!globalSettings.paused) {
-          globalSettings.savedSpeeds = circles.map(c => c.speed);
-          circles.forEach(c => { c.speed = 0; });
-          globalSettings.paused = true;
-          rebuildCircleFolder();
-        }
-      },
-      // 再開（保存していた速度を復元）
-      resumeMovement: function() {
-        if (globalSettings.paused) {
-          circles.forEach((c, i) => { c.speed = globalSettings.savedSpeeds[i] || globalSettings.speed; });
-          globalSettings.paused = false;
-          rebuildCircleFolder();
-        }
-      },
-      // 従来のストップ機能（即時停止）も残す場合はコメントアウトを解除
-      stopMovement: function() {
-        circles.forEach(function(c) { c.speed = 0; });
-        globalSettings.paused = true;
+
+      assignRandom: function() {
+        // 各円に対して、角度は 0～2π、速度は 0～params.maxSpeed のランダムな正の値を設定
+        circles.forEach(function(c) {
+          c.angle = Math.random() * 2 * Math.PI;
+          c.speed = Math.random() * params.maxSpeed;
+        });
         rebuildCircleFolder();
       }
-    };
-
-    // 内側の多角形情報を表示するためのオブジェクト
-    const status = {
-      innermostAngles: ""  // 内側多角形の各内角（度数表示）の文字列
     };
 
     // 各円上の点の状態を保持する配列（各要素は { angle, speed }）
     let circles = [];
     let circleFolder;  // 各円個別パラメータ用のフォルダ
+
+    // 内側多角形の各内角（度）を表示するためのオブジェクト
+    // 各キー "角度1", "角度2", … として個別に表示します。
+    let angleStatus = {};
+    let innerAnglesFolder;  // 内角表示用のフォルダ
 
     // canvas 関連
     const canvas = document.getElementById("canvas");
@@ -101,16 +84,19 @@
           speed: globalSettings.speed
         });
       }
-      globalSettings.paused = false;
+      rebuildInnerAnglesFolder();
     }
 
     // dat.GUI のセットアップ
     const gui = new dat.GUI();
+
+    // パラメータ系
     gui.add(params, "numberOfCircles", 3, 20, 1)
       .name("円の個数")
       .onFinishChange(() => {
         initCircles();
         rebuildCircleFolder();
+        rebuildInnerAnglesFolder();
       });
     gui.add(params, "iterations", 0, 50, 1).name("反復回数");
     gui.add(params, "circleRadius", 10, 200).name("小円の半径");
@@ -121,27 +107,19 @@
     gui.addColor(params, "pointColor").name("点の色");
     gui.add(params, "speedMultiplier", 0.1, 5).name("速度倍率");
     gui.addColor(params, "backgroundColor").name("背景色");
+    gui.add(params, "maxSpeed", 0.001, 1).name("最大速度");
 
-    // 全体設定用のGUIフォルダ
+    // 全体設定フォルダ
     const globalFolder = gui.addFolder("全体設定");
     globalFolder.add(globalSettings, "initialAngle", 0, 2 * Math.PI, 0.01).name("初期位置");
-    globalFolder.add(globalSettings, "speed", -0.1, 0.1, 0.001).name("速度");
+    globalFolder.add(globalSettings, "speed", 0, 0.1, 0.001).name("初期速度");
     globalFolder.add(globalSettings, "circlePlacementOffset", -Math.PI, Math.PI, 0.01).name("円配置オフセット");
-    // チェックボックス名称を「正多角形で一時停止」に変更
-    globalFolder.add(globalSettings, "autoStopOnRegular").name("正多角形で一時停止");
     globalFolder.add(globalSettings, "resetCircles").name("リセット");
-    // ここでは従来の即時停止ボタンは残しておく（不要ならコメントアウト可）
-    // globalFolder.add(globalSettings, "stopMovement").name("ストップ");
-    // 再開ボタンを追加
-    globalFolder.add(globalSettings, "resumeMovement").name("再開");
+    // ランダム割当ボタンを追加
+    globalFolder.add(globalSettings, "assignRandom").name("ランダム");
     globalFolder.open();
 
-    // 内側多角形情報表示用のフォルダ
-    const statusFolder = gui.addFolder("内側ポリゴン情報");
-    statusFolder.add(status, "innermostAngles").name("内角 (度)").listen();
-    statusFolder.open();
-
-    // 各円ごとのパラメータ用のフォルダを再構築
+    // 各円個別の設定用フォルダ
     function rebuildCircleFolder() {
       if (circleFolder) {
         gui.removeFolder(circleFolder);
@@ -149,9 +127,24 @@
       circleFolder = gui.addFolder("各円の設定");
       circles.forEach((c, i) => {
         circleFolder.add(c, "angle", 0, 2 * Math.PI, 0.01).name("円 " + (i+1) + " 角度");
-        circleFolder.add(c, "speed", -0.1, 0.1, 0.001).name("円 " + (i+1) + " 速度");
+        circleFolder.add(c, "speed", 0, params.maxSpeed, 0.001).name("円 " + (i+1) + " 速度");
       });
       circleFolder.open();
+    }
+
+    // 内角表示用フォルダを再構築
+    function rebuildInnerAnglesFolder() {
+      if (innerAnglesFolder) {
+        gui.removeFolder(innerAnglesFolder);
+      }
+      angleStatus = {};
+      innerAnglesFolder = gui.addFolder("内角 (度)");
+      // 円の個数分、個別の項目を作成
+      for (let i = 0; i < params.numberOfCircles; i++) {
+        angleStatus["角度" + (i + 1)] = 0;
+        innerAnglesFolder.add(angleStatus, "角度" + (i + 1)).listen();
+      }
+      innerAnglesFolder.open();
     }
 
     // 初期化
@@ -165,7 +158,7 @@
       draw();
     }
 
-    // 各円の角度更新（※一時停止中の場合は速度が0のため更新されません）
+    // 各円の角度更新（※各円の speed が 0 なら更新されません）
     function update() {
       circles.forEach(c => {
         c.angle += c.speed * params.speedMultiplier;
@@ -184,6 +177,7 @@
       const centerY = canvas.height / 2;
       const vertices = [];  // 各円上の動く点の座標
 
+      // 各小円および円周上の点の描画
       for (let i = 0; i < params.numberOfCircles; i++) {
         // 小円の中心位置：大円上に等間隔に配置（オフセットを加味）
         const theta = 2 * Math.PI * i / params.numberOfCircles + globalSettings.circlePlacementOffset;
@@ -229,9 +223,8 @@
         currentVertices = nextVertices;
       }
 
-      // 内側の多角形（currentVertices）の内角を計算して表示
+      // 内側の多角形（currentVertices）の内角を計算して、各個別項目に更新
       if (currentVertices.length >= 3) {
-        const angles = [];
         const n = currentVertices.length;
         for (let i = 0; i < n; i++) {
           const prev = currentVertices[(i - 1 + n) % n];
@@ -243,19 +236,9 @@
           const dot = vecA.x * vecB.x + vecA.y * vecB.y;
           const normA = Math.sqrt(vecA.x * vecA.x + vecA.y * vecA.y);
           const normB = Math.sqrt(vecB.x * vecB.x + vecB.y * vecB.y);
-          const angle = Math.acos(dot / (normA * normB));  // 内角（ラジアン）
-          angles.push(angle);
-        }
-        // 内角を度数（°）に変換して文字列にまとめる
-        status.innermostAngles = angles
-          .map(a => (a * 180 / Math.PI).toFixed(2))
-          .join(", ");
-
-        // 全ての内角が正確に等しいかチェック（許容誤差はなし）
-        const regular = angles.every(a => a === angles[0]);
-        if (globalSettings.autoStopOnRegular && !globalSettings.paused && regular) {
-          // 正多角形になった場合、一時停止（各円の速度を保持したうえで0にする）
-          globalSettings.pauseMovement();
+          const angleRad = Math.acos(dot / (normA * normB));  // 内角（ラジアン）
+          // 内角を度数（°）に変換して更新
+          angleStatus["角度" + (i + 1)] = (angleRad * 180 / Math.PI).toFixed(2);
         }
       }
     }
