@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>再帰的中点線分描画デモ（正多角形一時停止・再開機能付き）</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #ffffff; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  
+  <!-- dat.GUI の読み込み（CDN 経由） -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+  <script>
+    // 各種パラメータ設定オブジェクト
+    const params = {
+      numberOfCircles: 5,      // 配置する円の個数
+      iterations: 10,          // 反復回数（初期値を10に設定）
+      circleRadius: 50,        // 各小円の半径
+      outerRadius: 200,        // 小円の中心配置に用いる大円の半径
+      pointSize: 5,            // 動く点の半径
+      showCircles: true,       // 小円自体を描画するか
+      lineColor: "#000000",    // 線分の色（初期値を黒に設定）
+      pointColor: "#ff0000",   // 動く点の色
+      speedMultiplier: 1.0,    // 速度全体にかける係数
+      backgroundColor: "#ffffff"  // 背景色（初期値を白に設定）
+    };
+
+    // 全体設定オブジェクト
+    const globalSettings = {
+      initialAngle: 0,          // 円周上の点の初期位置
+      speed: 0.01,              // 円の速度
+      circlePlacementOffset: 0, // 小円配置時の角度オフセット
+      autoStopOnRegular: false, // 「正多角形で一時停止」機能：内側の多角形が正多角形になったときに一時停止するか
+      paused: false,            // 現在一時停止中かどうか
+      // 一時停止時に各円の速度を保存する配列
+      savedSpeeds: [],
+      resetCircles: function() {
+        // 各円の角度と速度を全体設定の値にリセット
+        circles.forEach(function(c) {
+          c.angle = globalSettings.initialAngle;
+          c.speed = globalSettings.speed;
+        });
+        globalSettings.paused = false;
+        rebuildCircleFolder();
+      },
+      // 一時停止（保存しておいた速度はそのまま保持）
+      pauseMovement: function() {
+        if (!globalSettings.paused) {
+          globalSettings.savedSpeeds = circles.map(c => c.speed);
+          circles.forEach(c => { c.speed = 0; });
+          globalSettings.paused = true;
+          rebuildCircleFolder();
+        }
+      },
+      // 再開（保存していた速度を復元）
+      resumeMovement: function() {
+        if (globalSettings.paused) {
+          circles.forEach((c, i) => { c.speed = globalSettings.savedSpeeds[i] || globalSettings.speed; });
+          globalSettings.paused = false;
+          rebuildCircleFolder();
+        }
+      },
+      // 従来のストップ機能（即時停止）も残す場合はコメントアウトを解除
+      stopMovement: function() {
+        circles.forEach(function(c) { c.speed = 0; });
+        globalSettings.paused = true;
+        rebuildCircleFolder();
+      }
+    };
+
+    // 内側の多角形情報を表示するためのオブジェクト
+    const status = {
+      innermostAngles: ""  // 内側多角形の各内角（度数表示）の文字列
+    };
+
+    // 各円上の点の状態を保持する配列（各要素は { angle, speed }）
+    let circles = [];
+    let circleFolder;  // 各円個別パラメータ用のフォルダ
+
+    // canvas 関連
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+
+    // canvas サイズをウィンドウサイズに合わせる
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener("resize", resizeCanvas);
+    resizeCanvas();
+
+    // 各円の状態を初期化（全ての円で同一の初期値を利用）
+    function initCircles() {
+      circles = [];
+      for (let i = 0; i < params.numberOfCircles; i++) {
+        circles.push({
+          angle: globalSettings.initialAngle,
+          speed: globalSettings.speed
+        });
+      }
+      globalSettings.paused = false;
+    }
+
+    // dat.GUI のセットアップ
+    const gui = new dat.GUI();
+    gui.add(params, "numberOfCircles", 3, 20, 1)
+      .name("円の個数")
+      .onFinishChange(() => {
+        initCircles();
+        rebuildCircleFolder();
+      });
+    gui.add(params, "iterations", 0, 50, 1).name("反復回数");
+    gui.add(params, "circleRadius", 10, 200).name("小円の半径");
+    gui.add(params, "outerRadius", 50, 500).name("配置円の半径");
+    gui.add(params, "pointSize", 2, 20).name("点の大きさ");
+    gui.add(params, "showCircles").name("小円を表示");
+    gui.addColor(params, "lineColor").name("線分の色");
+    gui.addColor(params, "pointColor").name("点の色");
+    gui.add(params, "speedMultiplier", 0.1, 5).name("速度倍率");
+    gui.addColor(params, "backgroundColor").name("背景色");
+
+    // 全体設定用のGUIフォルダ
+    const globalFolder = gui.addFolder("全体設定");
+    globalFolder.add(globalSettings, "initialAngle", 0, 2 * Math.PI, 0.01).name("初期位置");
+    globalFolder.add(globalSettings, "speed", -0.1, 0.1, 0.001).name("速度");
+    globalFolder.add(globalSettings, "circlePlacementOffset", -Math.PI, Math.PI, 0.01).name("円配置オフセット");
+    // チェックボックス名称を「正多角形で一時停止」に変更
+    globalFolder.add(globalSettings, "autoStopOnRegular").name("正多角形で一時停止");
+    globalFolder.add(globalSettings, "resetCircles").name("リセット");
+    // ここでは従来の即時停止ボタンは残しておく（不要ならコメントアウト可）
+    // globalFolder.add(globalSettings, "stopMovement").name("ストップ");
+    // 再開ボタンを追加
+    globalFolder.add(globalSettings, "resumeMovement").name("再開");
+    globalFolder.open();
+
+    // 内側多角形情報表示用のフォルダ
+    const statusFolder = gui.addFolder("内側ポリゴン情報");
+    statusFolder.add(status, "innermostAngles").name("内角 (度)").listen();
+    statusFolder.open();
+
+    // 各円ごとのパラメータ用のフォルダを再構築
+    function rebuildCircleFolder() {
+      if (circleFolder) {
+        gui.removeFolder(circleFolder);
+      }
+      circleFolder = gui.addFolder("各円の設定");
+      circles.forEach((c, i) => {
+        circleFolder.add(c, "angle", 0, 2 * Math.PI, 0.01).name("円 " + (i+1) + " 角度");
+        circleFolder.add(c, "speed", -0.1, 0.1, 0.001).name("円 " + (i+1) + " 速度");
+      });
+      circleFolder.open();
+    }
+
+    // 初期化
+    initCircles();
+    rebuildCircleFolder();
+
+    // アニメーションループ
+    function animate() {
+      requestAnimationFrame(animate);
+      update();
+      draw();
+    }
+
+    // 各円の角度更新（※一時停止中の場合は速度が0のため更新されません）
+    function update() {
+      circles.forEach(c => {
+        c.angle += c.speed * params.speedMultiplier;
+        if (c.angle > 2 * Math.PI) c.angle -= 2 * Math.PI;
+        if (c.angle < 0) c.angle += 2 * Math.PI;
+      });
+    }
+
+    // 描画処理
+    function draw() {
+      // 背景色でキャンバス全体を塗りつぶす
+      ctx.fillStyle = params.backgroundColor;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+      const vertices = [];  // 各円上の動く点の座標
+
+      for (let i = 0; i < params.numberOfCircles; i++) {
+        // 小円の中心位置：大円上に等間隔に配置（オフセットを加味）
+        const theta = 2 * Math.PI * i / params.numberOfCircles + globalSettings.circlePlacementOffset;
+        const cx = centerX + params.outerRadius * Math.cos(theta);
+        const cy = centerY + params.outerRadius * Math.sin(theta);
+
+        // 小円自体の描画（オプション）
+        if (params.showCircles) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, params.circleRadius, 0, 2 * Math.PI);
+          ctx.strokeStyle = "#555";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+
+        // 各小円上の動く点の位置（各円の angle を利用）
+        const angle = circles[i].angle;
+        const px = cx + params.circleRadius * Math.cos(angle);
+        const py = cy + params.circleRadius * Math.sin(angle);
+        vertices.push({ x: px, y: py });
+
+        // 点の描画
+        ctx.beginPath();
+        ctx.arc(px, py, params.pointSize, 0, 2 * Math.PI);
+        ctx.fillStyle = params.pointColor;
+        ctx.fill();
+      }
+
+      // 初期多角形（各点を順に結び、先頭と末尾も結ぶ）
+      drawPolygon(vertices, params.lineColor);
+
+      // 反復的に各辺の中点を結んで描画（内側多角形を生成）
+      let currentVertices = vertices;
+      for (let iter = 0; iter < params.iterations; iter++) {
+        const nextVertices = [];
+        for (let i = 0; i < currentVertices.length; i++) {
+          const nextIndex = (i + 1) % currentVertices.length;
+          const midX = (currentVertices[i].x + currentVertices[nextIndex].x) / 2;
+          const midY = (currentVertices[i].y + currentVertices[nextIndex].y) / 2;
+          nextVertices.push({ x: midX, y: midY });
+        }
+        drawPolygon(nextVertices, params.lineColor);
+        currentVertices = nextVertices;
+      }
+
+      // 内側の多角形（currentVertices）の内角を計算して表示
+      if (currentVertices.length >= 3) {
+        const angles = [];
+        const n = currentVertices.length;
+        for (let i = 0; i < n; i++) {
+          const prev = currentVertices[(i - 1 + n) % n];
+          const curr = currentVertices[i];
+          const next = currentVertices[(i + 1) % n];
+          // 前後の頂点とのベクトル
+          const vecA = { x: prev.x - curr.x, y: prev.y - curr.y };
+          const vecB = { x: next.x - curr.x, y: next.y - curr.y };
+          const dot = vecA.x * vecB.x + vecA.y * vecB.y;
+          const normA = Math.sqrt(vecA.x * vecA.x + vecA.y * vecA.y);
+          const normB = Math.sqrt(vecB.x * vecB.x + vecB.y * vecB.y);
+          const angle = Math.acos(dot / (normA * normB));  // 内角（ラジアン）
+          angles.push(angle);
+        }
+        // 内角を度数（°）に変換して文字列にまとめる
+        status.innermostAngles = angles
+          .map(a => (a * 180 / Math.PI).toFixed(2))
+          .join(", ");
+
+        // 全ての内角が正確に等しいかチェック（許容誤差はなし）
+        const regular = angles.every(a => a === angles[0]);
+        if (globalSettings.autoStopOnRegular && !globalSettings.paused && regular) {
+          // 正多角形になった場合、一時停止（各円の速度を保持したうえで0にする）
+          globalSettings.pauseMovement();
+        }
+      }
+    }
+
+    // 多角形を描画するヘルパー関数
+    function drawPolygon(points, strokeStyle) {
+      if (points.length < 2) return;
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i].x, points[i].y);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = strokeStyle;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    // アニメーション開始
+    animate();
+  </script>
+</body>
+</html>
